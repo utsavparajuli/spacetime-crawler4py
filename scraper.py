@@ -1,11 +1,13 @@
 import re
+from collections import defaultdict
 from urllib.parse import urlparse
+
+import tldextract
+from bs4 import BeautifulSoup
 from nltk import download
 from nltk.corpus import stopwords
-from urllib.request import urlopen
-from collections import defaultdict
 
-from bs4 import BeautifulSoup
+from tokenizerSelf import Tokenizer
 
 f = open("out.txt", "w")
 download('stopwords')
@@ -13,81 +15,92 @@ download('stopwords')
 cache = set()
 stops = set(stopwords.words('english'))
 
+subdomainsHash = defaultdict(set)
+
 hashWords = defaultdict(int)
+accepted_urls = {".ics.uci.edu", ".cs.uci.edu",
+                 ".informatics.uci.edu", ".stat.uci.edu"}
+
+maxPage = ""
+maxPageLength = 0
+
 
 def scraper(url, resp):
-    links = extract_next_links(url, resp)
-
+    global maxPageLength
+    global maxPage
     ret = []
+    links, lineTokens = extract_next_links(url, resp)
 
     for link in links:
-        if is_valid(link):
+        valid, domain, subdomain = is_valid(link)
+        if valid:
             ret.append(link)
             # adding to cache
             cache.add(link)
 
+            if "ics.uci.edu" in domain:
+                subdomainsHash[subdomain].add(link)
+
+            # adding to most common words hash
+            for val in lineTokens:
+                if val not in stops:
+                    hashWords[val] += 1
+
+            # getting maximum page
+            if (len(lineTokens) > maxPageLength):
+                maxPageLength = len(lineTokens)
+                maxPage = link
     for url in ret:
         f.write(url + "\n")
     return ret
 
 
-#Analysis questions #3
+# Analysis questions #3
 def mostCommon():
-    return sorted(hashWords, key = lambda x: hashWords[x])
+    return sorted(hashWords, key=lambda x: hashWords[x])[-50:]
 
 
-#Analysis questions #2
+# Analysis questions #4
+def subdomainICS():
+    list1 = sorted(subdomainsHash)
+
+    for val in list1:
+        print(val, len(subdomainsHash[val]))
+
+
+# Analysis questions #2
 def longestPage():
-    max1 = 0
-    maxPage = ""
-    for page in cache:
-        f = urlopen(page)
-        f = f.read().decode('utf-8')
-
-        lineTokens = []
-
-        #tokenizing words
-        for line in f:
-            line = re.sub('<[^<]+?>', '', line)
-            line = re.split('[^a-zA-Z0-9]+', line)
-            for v in line:
-                lineTokens.append(v)
-
-        lineTokens = [val for val in lineTokens if val != ""]
-
-        for val in lineTokens:
-            if val not in stops:
-                hashWords[val] += 1
-        if(len(lineTokens) > max1):
-            max1 = len(lineTokens)
-            maxPage = page
     return maxPage
 
-        
-#Analysis questions #1
+
+# Analysis questions #1
 def uniquePages():
     return len(cache)
 
 
 def extract_next_links(url, resp):
     ret = []
+
     if resp.error is not None:
         print(resp.error)
-        return list()
+        return [], []
 
-    if resp.raw_response is None:
-        return list()
+    if resp.raw_response is None or\
+            ("Content-Type" in resp.raw_response.headers and "application/pdf" in resp.raw_response.headers['Content-Type']):
+        return [], []
 
     soup = BeautifulSoup(resp.raw_response.content, "html.parser")
+    lineTokens = Tokenizer.tokenize(soup.get_text())
+
     for link in soup.find_all('a'):
         url_link = link.get('href')
-        if url_link is not None and is_valid(url_link):
+        if url_link is not None:
             index = url_link.find("#")
             if index != -1:
                 ret.append(url_link[0:index])
             else:
                 ret.append(url_link)
-        
+
     # Implementation required.
     # url: the URL that was used to get the page
     # resp.url: the actual url of the page
@@ -97,7 +110,7 @@ def extract_next_links(url, resp):
     #         resp.raw_response.url: the url, again
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
-    return ret
+    return ret, lineTokens
 
 
 def is_valid(url):
@@ -106,26 +119,24 @@ def is_valid(url):
     # There are already some conditions that return False.
     try:
         parsed = urlparse(url)
-        if (parsed.scheme not in set(["http", "https"])) or url in cache:
-            return False
+        domains = tldextract.extract(url)
+        fqdn = domains.fqdn
 
-        domain = parsed.netloc
-
-        if domain.startswith('www.'):
-            domain = domain[4:]
-
-        if(domain not in set(["ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu"])):
-            return False
-
+        if parsed.scheme not in set(["http", "https"])\
+           or url in cache or not any(s in fqdn for s in accepted_urls)\
+           or (fqdn == "today.uci.edu" and parsed.path != "/department/information_computer_sciences/"):
+            return False, fqdn, domains.subdomain
         return not re.match(
             r".*\.(css|js|bmp|gif|jpe?g|ico"
             + r"|png|tiff?|mid|mp2|mp3|mp4"
             + r"|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf"
-            + r"|ps|eps|tex|ppt|pptx|doc|docx|xls|xlsx|names"
+            + r"|ps|eps|tex|ppt|pptx|ppsx|doc|docx|xls|xlsx|names"
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
-            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower())
+            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower()),\
+            fqdn,\
+            domains.subdomain
 
     except TypeError:
         print("TypeError for ", parsed)

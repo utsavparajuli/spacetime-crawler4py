@@ -20,7 +20,11 @@ class Worker(Thread):
         while True:
             tbd_url = self.frontier.get_tbd_url()
             if not tbd_url:
+                print(scraper.uniquePages())
+                # print(scraper.longestPage())
+                #print(scraper.mostCommon())
                 self.logger.info("Frontier is empty. Stopping Crawler.")
+
                 break
             resp = download(tbd_url, self.config, self.logger)
             self.logger.info(
